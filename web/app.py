@@ -92,7 +92,7 @@ def is_streamlit_cloud() -> bool:
         or "streamlit.app" in os.getenv("HOSTNAME", "")
     )
 
-DEMO_MODE_DEFAULT = is_streamlit_cloud()
+DEMO_MODE_DEFAULT = True
 def _is_running_under_pytest() -> bool:
     return "PYTEST_CURRENT_TEST" in os.environ
 
@@ -104,6 +104,26 @@ def _horizon_to_dates(horizon: str) -> Tuple[str, str]:
     end = dt.date.today()
     start = end.replace(year=end.year - years)
     return (start.strftime(DATE_FMT), end.strftime(DATE_FMT))
+
+def _first_existing(paths: list[pathlib.Path]) -> pathlib.Path | None:
+    for p in paths:
+        try:
+            if p.exists():
+                return p
+        except Exception:
+            pass
+    return None
+
+def _find_stats_file(name: str) -> pathlib.Path | None:
+    """
+    Looks for docs/backtests/<name> and docs/backtest/<name>
+    (handles the common folder-name mismatch).
+    """
+    candidates = [
+        PROJECT_ROOT / "docs" / "backtests" / name,
+        PROJECT_ROOT / "docs" / "backtest"  / name,
+    ]
+    return _first_existing(candidates)
 
 def _ensure_equity_df(equity_obj: Any) -> pd.DataFrame:
     """
@@ -905,6 +925,13 @@ def sidebar_global() -> tuple[str, float, float, float, float, bool]:
         value=os.environ.get("AOE_LEDGER", DEFAULT_LEDGER),
         key="glob_ledger_path",
     )
+    try:
+        p = pathlib.Path(ledger_path).expanduser()
+        if p.exists() and p.is_dir():
+            ledger_path = str((p / "pnl_paper.csv").resolve())
+            st.sidebar.warning("Ledger path was a folder; using pnl_paper.csv inside it.")
+    except Exception:
+        pass
     os.environ["AOE_LEDGER"] = ledger_path
 
     st.sidebar.subheader("Execution & Costs")
@@ -1313,57 +1340,81 @@ def tab_results(ledger_path: str, slippage_bps: float, fee_per_contract: float, 
 def tab_model_stats_static() -> None:
     st.subheader("Model Stats — Precomputed (5y / 10y)")
 
-    paths = [
-        ("10y", PROJECT_ROOT / "docs" / "backtests" / "10y.json"),
-        ("5y",  PROJECT_ROOT / "docs" / "backtests" / "5y.json"),
+    targets = [
+    ("10y", ["10y.json", "backtest_10y.json", "ic_10y.json"]),
+    ("5y",  ["5y.json",  "backtest_5y.json",  "ic_5y.json"]),
     ]
-    for label, p in paths:
-        if not p.exists():
-            st.warning(f"{label}: stats file missing at {p}")
-            continue
+
+
+    any_loaded = False
+
+    for label, fnames in targets:
+        p = None
+        for fname in fnames:
+            p = _find_stats_file(fname)
+            if p is not None:
+                break
+
         try:
             payload = json.loads(p.read_text())
         except Exception as e:
-            st.error(f"Failed to load {label}: {e}")
+            st.error(f"{label}: failed to load {p}: {e}")
             continue
 
         meta = payload.get("meta", {})
         eq_list = payload.get("equity", [])
         eq = pd.DataFrame(eq_list)
+
         if "date" in eq.columns:
             eq["date"] = pd.to_datetime(eq["date"], errors="coerce")
 
         st.markdown(f"**{label.upper()}**  ({meta.get('start','?')} → {meta.get('end','?')})")
-        cols = st.columns([2,1])
+        st.caption(f"Loaded from: {p}")
+
+        cols = st.columns([2, 1])
         with cols[0]:
             if HAVE_PLOTLY and not eq.empty:
                 try:
                     st.plotly_chart(px.line(eq, x="date", y="equity", title="Equity"), use_container_width=True)
                 except Exception:
                     st.line_chart(eq.set_index("date")["equity"])
-            elif not eq.empty:
+            elif not eq.empty and "date" in eq.columns and "equity" in eq.columns:
                 st.line_chart(eq.set_index("date")["equity"])
             else:
-                st.caption("No equity series.")
+                st.info("No equity series in this file (expected payload['equity'] = [{date, equity}, ...]).")
 
         with cols[1]:
             sm = payload.get("summaries", {})
             if isinstance(sm, dict) and sm:
                 def _get(*keys):
                     for k in keys:
-                        if k in sm: return sm[k]
+                        if k in sm:
+                            return sm[k]
                     return float("nan")
-                cagr   = float(_get("CAGR","cagr"))
-                sharpe = float(_get("Sharpe","sharpe"))
-                mdd    = float(_get("MaxDD","maxdd"))
+
+                cagr   = float(_get("CAGR", "cagr"))
+                sharpe = float(_get("Sharpe", "sharpe"))
+                mdd    = float(_get("MaxDD", "maxdd"))
+
                 st.metric("CAGR", f"{cagr:.2%}" if pd.notna(cagr) else "—")
                 st.metric("Sharpe", f"{sharpe:.2f}" if pd.notna(sharpe) else "—")
                 st.metric("Max Drawdown", f"{mdd:.2%}" if pd.notna(mdd) else "—")
             else:
-                st.caption("No summary stats available.")
-        with st.expander("Run configuration"):
+                st.caption("No summary stats available in payload['summaries'].")
+
+        with st.expander("Run configuration (meta)"):
             st.json(meta)
+
         st.divider()
+        any_loaded = True
+
+    if not any_loaded:
+        st.info(
+            "No precomputed stats were loaded. Confirm you have:\n"
+            "- docs/backtests/10y.json and docs/backtests/5y.json (or docs/backtest/...)\n"
+            "- each JSON contains keys: 'equity' (list of {date,equity}) and 'summaries' (dict)."
+        )
+
 
 # ---------------- UI: Research page ----------------
 def tab_research() -> None:
