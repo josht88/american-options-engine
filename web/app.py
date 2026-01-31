@@ -1462,7 +1462,12 @@ def run() -> None:
         tab_results(ledger_path, slippage_bps, fee_per_contract, demo_mode)
 
     with tabs[2]:
-        tab_model_stats_static()
+        st.subheader("Model Stats — Precomputed (5y / 10y)")
+        if st.checkbox("Load stats files now", value=False):
+            tab_model_stats_static()
+        else:
+            st.info("Stats loading is paused to keep startup fast. Enable the checkbox to load 5y/10y.")
+
     with tabs[3]:
         tab_research()
 
