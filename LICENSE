@@ -19,3 +19,33 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+-----------------------------------------------------------------------
+
+ADDITIONAL DISCLAIMER (RESEARCH & EDUCATIONAL USE ONLY)
+
+This software is provided solely for research, educational, and informational
+purposes. It is NOT intended to provide financial, investment, trading, legal,
+or tax advice.
+
+Nothing in this repository, including but not limited to source code, models,
+outputs, user interfaces, documentation, or example results, constitutes a
+recommendation, solicitation, or endorsement to buy, sell, or hold any
+security, derivative, or financial instrument.
+
+Trading options and other financial instruments involves substantial risk,
+including the risk of total loss. Past performance, whether simulated or
+historical, is not indicative of future results.
+
+Users of this software acknowledge and agree that:
+• They are solely responsible for any decisions made using this software
+• They assume all risks associated with its use
+• The author bears NO responsibility for financial losses, damages, or
+  consequences arising from its use
+
+This software does not account for individual financial circumstances,
+objectives, or risk tolerance. Users should consult a qualified financial
+professional before making any investment or trading decisions.
+
+By using, copying, modifying, or distributing this software, you agree to
+these terms.
