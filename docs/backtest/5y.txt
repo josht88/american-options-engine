@@ -1,0 +1,19 @@
+AOE Options — 5-Year Backtest Summary (Static Placeholder)
+
+The full 5-year backtest artifacts are intentionally excluded from the repo
+because they exceed size limits for Streamlit Cloud deployments.
+
+Original setup:
+• Strategy: Iron condors (delta-neutral, defined risk)
+• Horizon: ~5 years
+• Universe: SPY, QQQ, AAPL, MSFT, NVDA (rotating)
+• Risk controls: Wing width, credit ≤ width sanity gate
+
+Observed behavior:
+• Lower drawdowns vs naked premium selling
+• Consistent premium capture in range-bound regimes
+• Drawdowns clustered around volatility expansion events
+
+Run locally for full metrics (equity curve, CAGR, Sharpe, Max DD).
+
+This placeholder ensures the Model Stats tab renders correctly.
