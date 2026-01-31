@@ -73,7 +73,7 @@ from types import SimpleNamespace
 
 __all__ = [
     "_ensure_ledger", "_equity_from_ledger", "_equity_from_backtest",
-    "_run_screen", "build_ic_from_chain_simple", "build_ic_grid_search",
+    "build_ic_from_chain_simple", "build_ic_grid_search",
     "_rehydrate_condors", "run_condor_diagnostic",
 ]
 
@@ -84,6 +84,15 @@ DEFAULT_BANKROLL = 50_000.0
 DEFAULT_KELLY_CAP = 0.05     # 5% of bankroll per trade
 SHOW_DEBUG_DEFAULT = False
 
+def is_streamlit_cloud() -> bool:
+    # Streamlit Community Cloud sets these in many deployments
+    return (
+        os.getenv("STREAMLIT_SHARING") == "true"
+        or os.getenv("STREAMLIT_CLOUD") == "true"
+        or "streamlit.app" in os.getenv("HOSTNAME", "")
+    )
+
+DEMO_MODE_DEFAULT = is_streamlit_cloud()
 def _is_running_under_pytest() -> bool:
     return "PYTEST_CURRENT_TEST" in os.environ
 
@@ -889,7 +898,7 @@ def run_condor_diagnostic(
     return pd.DataFrame(rows, columns=["date","ticker","chain_rows","condor_rows","pass_rows","reason"])
 
 # ---------------- UI: sidebar ----------------
-def sidebar_global() -> tuple[str, float, float, float, float]:
+def sidebar_global() -> tuple[str, float, float, float, float, bool]:
     st.sidebar.header("Global")
     ledger_path = st.sidebar.text_input(
         "Ledger CSV (AOE_LEDGER)",
@@ -906,6 +915,11 @@ def sidebar_global() -> tuple[str, float, float, float, float]:
     edge_cap = st.sidebar.number_input("Edge% cap (sanity)", 10.0, 300.0, 120.0, step=5.0, key="glob_edgecap")
     wing_tol = st.sidebar.number_input("Wing equality tolerance ($)", 0.0, 2.0, 0.10, step=0.05, key="glob_wingtol")
     credit_leeway = st.sidebar.number_input("Credit ≤ width leeway", 0.0, 0.50, 0.05, step=0.01, key="glob_crleeway")
+    demo_mode = st.sidebar.checkbox(
+    "Demo mode (disable live Yahoo/yfinance)",
+    value=DEMO_MODE_DEFAULT,
+    help="Recommended on Streamlit Cloud. Run locally for live data.",
+    )
 
     if st.sidebar.button("Mark-to-Market Now", key="glob_mtm_btn"):
         ok, msg = _mark_to_market(ledger_path)
@@ -913,7 +927,7 @@ def sidebar_global() -> tuple[str, float, float, float, float]:
     st.sidebar.caption(f"Ledger file: {ledger_path}")
     st.sidebar.divider()
 
-    return ledger_path, float(slippage_bps), float(fee_per_contract), float(wing_tol), float(credit_leeway)
+    return ledger_path, float(slippage_bps), float(fee_per_contract), float(wing_tol), float(credit_leeway), bool(demo_mode)
 
 # ---------------- UI: Screen ----------------
 def _build_ic_order_namespace(row) -> Any:
@@ -971,7 +985,44 @@ def _paper_append_order(order_obj: Any, ledger_path: str) -> None:
     df = pd.concat([df, pd.DataFrame([row])], ignore_index=True)
     df.to_csv(p, index=False)
 
-def tab_screen(slippage_bps: float, fee_per_contract: float, wing_tol: float, credit_leeway: float) -> None:
+def _demo_candidates(tickers: list[str], dte_days: int, wing_width: float, fee_per_contract: float) -> pd.DataFrame:
+    # Simple, deterministic rows so the UI always shows "working" output
+    base = []
+    tickers = tickers or ["SPY", "QQQ", "AAPL"]
+    tickers = [t.strip().upper() for t in tickers if t.strip()]
+    tickers = tickers[:6]  # keep small
+
+    for tk in tickers:
+        # Fake strikes centered around a dummy spot of 100 for consistency
+        spot = 100.0
+        sp = 100.0
+        lp = sp - float(wing_width)
+        sc = 100.0
+        lc = sc + float(wing_width)
+
+        credit = round(max(0.10, 0.18 * float(wing_width)), 2)  # looks reasonable
+        max_loss = round(max(0.01, float(wing_width) - credit), 2)
+
+        base.append(dict(
+            select=False,
+            ticker=tk,
+            expiry=(dt.date.today() + dt.timedelta(days=int(dte_days))).isoformat(),
+            right="CONDOR",
+            short_put=sp,
+            long_put=lp,
+            short_call=sc,
+            long_call=lc,
+            credit=float(credit),
+            max_loss=float(max_loss),
+            fee_per_contract=float(fee_per_contract),
+            portfolio_pct=int(DEFAULT_KELLY_CAP * 100),
+            qty=1,
+        ))
+
+    return pd.DataFrame(base)
+
+
+def tab_screen(slippage_bps: float, fee_per_contract: float, wing_tol: float, credit_leeway: float, demo_mode: bool) -> None:
     st.subheader("Daily Screening — Iron Condors")
 
     c1, c2, c3 = st.columns([2, 1, 1])
@@ -986,80 +1037,104 @@ def tab_screen(slippage_bps: float, fee_per_contract: float, wing_tol: float, cr
     min_edge_pct = st.slider("Min edge % (credit/width, based on MID)", 0.0, 50.0, 5.0, key="scr_edge_min")
 
     run_btn = st.button("Run Screening", key="scr_run_btn")
-    st.caption("Models are used if available; otherwise we fall back to raw chains via yfinance.")
-
+    if demo_mode:
+        st.caption("Demo mode is ON (no live Yahoo/yfinance calls). Run locally and disable demo mode for live chains.")
+    else:
+        st.caption("Models are used if available; otherwise we fall back to raw chains via yfinance.")
+    
+        
     if run_btn:
         tickers = _parse_universe(uni_raw)
         if not tickers:
             st.warning("Please enter at least one ticker.")
             st.session_state["scr_candidates_df"] = pd.DataFrame()
         else:
-            rows: list[dict] = []
-            for tk in tickers:
-                try:
-                    snap = ensure_model(tk)
-                except Exception:
-                    snap = {"spot": None}
-                try:
-                    mdl = load_model(tk, spot=snap.get("spot") if isinstance(snap, dict) else None, max_age_days=5) if load_model else None
-                except Exception:
-                    mdl = None
-
-                try:
-                    singles = _scan_high_ev_contracts_compat(tk, p_tail=p_tail, dte_days=int(dte_days))
-                except Exception:
-                    singles = pd.DataFrame()
-
-                spot_val = _resolve_spot(tk, mdl, singles, snap)
-
-                condors = build_ic_from_chain_simple(
-                    singles, spot=spot_val, wing=wing_width, dte_days=int(dte_days),
-                    slippage_bps=slippage_bps, fee_per_contract=fee_per_contract,
-                    width_tol=wing_tol, credit_leeway=credit_leeway, use_exec_prices=True
-                )
-                if condors.empty:
-                    condors = build_ic_grid_search(
-                        singles, spot=spot_val, dte_days=int(dte_days),
-                        wings=(max(1.0, wing_width-2), wing_width, wing_width+2),
-                        top_n=5,
-                        slippage_bps=slippage_bps, fee_per_contract=fee_per_contract,
-                        width_tol=wing_tol, credit_leeway=credit_leeway, use_exec_prices=True
-                    )
-                if condors.empty:
-                    continue
-
-                c2df = condors.copy()
-                for c in ("edge_pct","credit","width","risk"):
-                    c2df[c] = pd.to_numeric(c2df.get(c), errors="coerce")
-                c2df = c2df[(c2df["credit"] >= 0) & (c2df["risk"] > 0) & (c2df["edge_pct"] >= float(min_edge_pct))]
-                if c2df.empty:
-                    continue
-
-                score = pd.to_numeric(c2df.get("exec_credit"), errors="coerce").fillna(0)
-                score = score.where(score > 0, pd.to_numeric(c2df.get("builder_credit"), errors="coerce").fillna(0))
-                c2df = c2df.assign(_score=score).sort_values("_score", ascending=False)
-
-                top = c2df.iloc[0]
-                per_contract_risk = float(top["risk"])
-                qty = int(max(0, (DEFAULT_BANKROLL * DEFAULT_KELLY_CAP) // per_contract_risk)) if per_contract_risk > 0 else 0
-
-                rows.append(dict(
-                    select=False,
-                    ticker=tk,
-                    expiry=str(top["expiry"]),
-                    right="CONDOR",
-                    short_put=float(top["short_put"]),
-                    long_put=float(top["long_put"]),
-                    short_call=float(top["short_call"]),
-                    long_call=float(top["long_call"]),
-                    credit=float(round(top["credit"], 2)),
-                    max_loss=float(round(per_contract_risk, 2)),
+            # --- DEMO MODE: never touch yfinance / scan_high_ev_contracts ---
+            if demo_mode:
+                st.info("Demo mode: showing sample candidates (no live data calls).")
+                st.session_state["scr_candidates_df"] = _demo_candidates(
+                    tickers=tickers,
+                    dte_days=int(dte_days),
+                    wing_width=float(wing_width),
                     fee_per_contract=float(fee_per_contract),
-                    portfolio_pct=int(DEFAULT_KELLY_CAP * 100),
-                    qty=int(qty),
-                ))
+                )
+            else:
+                # --- LIVE MODE (best effort) ---
+                rows: list[dict] = []
+                for tk in tickers:
+                    try:
+                        snap = ensure_model(tk)
+                    except Exception:
+                        snap = {"spot": None}
+    
+                    try:
+                        mdl = load_model(tk, spot=snap.get("spot") if isinstance(snap, dict) else None, max_age_days=5) if load_model else None
+                    except Exception:
+                        mdl = None
+    
+                    try:
+                        singles = _scan_high_ev_contracts_compat(tk, p_tail=p_tail, dte_days=int(dte_days))
+                    except Exception as e:
+                        singles = pd.DataFrame()
+                        # avoid log spam: show one-line warning in UI per ticker
+                        st.warning(f"{tk}: live chain fetch failed (likely Yahoo/yfinance blocked on cloud). Error: {e}")
+    
+                    spot_val = _resolve_spot(tk, mdl, singles, snap)
+    
+                    try:
+                        condors = build_ic_from_chain_simple(
+                            singles, spot=spot_val, wing=wing_width, dte_days=int(dte_days),
+                            slippage_bps=slippage_bps, fee_per_contract=fee_per_contract,
+                            width_tol=wing_tol, credit_leeway=credit_leeway, use_exec_prices=True
+                        )
+                        if condors.empty:
+                            condors = build_ic_grid_search(
+                                singles, spot=spot_val, dte_days=int(dte_days),
+                                wings=(max(1.0, wing_width-2), wing_width, wing_width+2),
+                                top_n=5,
+                                slippage_bps=slippage_bps, fee_per_contract=fee_per_contract,
+                                width_tol=wing_tol, credit_leeway=credit_leeway, use_exec_prices=True
+                            )
+                    except Exception as e:
+                        st.warning(f"{tk}: model/spread construction failed. Error: {e}")
+                        continue
+    
+                    if condors.empty:
+                        continue
+    
+                    c2df = condors.copy()
+                    for c in ("edge_pct","credit","width","risk"):
+                        c2df[c] = pd.to_numeric(c2df.get(c), errors="coerce")
+                    c2df = c2df[(c2df["credit"] >= 0) & (c2df["risk"] > 0) & (c2df["edge_pct"] >= float(min_edge_pct))]
+                    if c2df.empty:
+                        continue
+    
+                    score = pd.to_numeric(c2df.get("exec_credit"), errors="coerce").fillna(0)
+                    score = score.where(score > 0, pd.to_numeric(c2df.get("builder_credit"), errors="coerce").fillna(0))
+                    c2df = c2df.assign(_score=score).sort_values("_score", ascending=False)
+    
+                    top = c2df.iloc[0]
+                    per_contract_risk = float(top["risk"])
+                    qty = int(max(0, (DEFAULT_BANKROLL * DEFAULT_KELLY_CAP) // per_contract_risk)) if per_contract_risk > 0 else 0
+    
+                    rows.append(dict(
+                        select=False,
+                        ticker=tk,
+                        expiry=str(top["expiry"]),
+                        right="CONDOR",
+                        short_put=float(top["short_put"]),
+                        long_put=float(top["long_put"]),
+                        short_call=float(top["short_call"]),
+                        long_call=float(top["long_call"]),
+                        credit=float(round(top["credit"], 2)),
+                        max_loss=float(round(per_contract_risk, 2)),
+                        fee_per_contract=float(fee_per_contract),
+                        portfolio_pct=int(DEFAULT_KELLY_CAP * 100),
+                        qty=int(qty),
+                    ))
+    
+                st.session_state["scr_candidates_df"] = pd.DataFrame(rows)
 
-            st.session_state["scr_candidates_df"] = pd.DataFrame(rows)
 
     df = st.session_state.get("scr_candidates_df", pd.DataFrame())
     if df.empty:
@@ -1152,7 +1227,7 @@ def _run_backtest_cached(tickers: List[str], start: str, end: str,
     return backtest_universe(tickers, start, end, **params)
 
 # ---------------- UI: Results ----------------
-def tab_results(ledger_path: str, slippage_bps: float, fee_per_contract: float) -> None:
+def tab_results(ledger_path: str, slippage_bps: float, fee_per_contract: float, demo_mode: bool) -> None:
     st.subheader("Results")
 
     colA, colB = st.columns([2, 1])
@@ -1173,6 +1248,11 @@ def tab_results(ledger_path: str, slippage_bps: float, fee_per_contract: float) 
             st.line_chart(eq.set_index("date")["equity"])
 
     st.divider()
+    st.markdown("### Backtests (auto-run for current universe)")
+
+    if demo_mode:
+        st.info("Demo mode: backtests are disabled on Streamlit Cloud. Run locally for full backtests.")
+        return
 
     st.markdown("### Backtests (auto-run for current universe)")
     uni_raw = st.session_state.get("scr_universe", "SPY")
@@ -1322,12 +1402,14 @@ def run() -> None:
     st.title("AOE Options — Research Console")
 
     tabs = st.tabs(["🔎 Screen", "📈 Results", "📊 Model Stats", "📚 Research"])
-    ledger_path, slippage_bps, fee_per_contract, wing_tol, credit_leeway = sidebar_global()
-
+    ledger_path, slippage_bps, fee_per_contract, wing_tol, credit_leeway, demo_mode = sidebar_global()
+    
     with tabs[0]:
-        tab_screen(slippage_bps, fee_per_contract, wing_tol, credit_leeway)
+        tab_screen(slippage_bps, fee_per_contract, wing_tol, credit_leeway, demo_mode)
+
     with tabs[1]:
-        tab_results(ledger_path, slippage_bps, fee_per_contract)
+        tab_results(ledger_path, slippage_bps, fee_per_contract, demo_mode)
+
     with tabs[2]:
         tab_model_stats_static()
     with tabs[3]:
