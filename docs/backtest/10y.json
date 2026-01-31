@@ -1,0 +1,28 @@
+{
+  "meta": {
+    "name": "precomputed-10y-placeholder",
+    "strategy": "iron_condor",
+    "notes": "Placeholder snapshot so the Streamlit Model Stats tab renders. Replace with real backtest export when available.",
+    "start": "2016-01-01",
+    "end": "2026-01-01",
+    "generated_at_utc": "2026-01-31T00:00:00Z"
+  },
+  "summaries": {
+    "CAGR": 0.0,
+    "Sharpe": 0.0,
+    "MaxDD": 0.0
+  },
+  "equity": [
+    { "date": "2016-01-01", "equity": 0.0 },
+    { "date": "2017-01-01", "equity": 250.0 },
+    { "date": "2018-01-01", "equity": 500.0 },
+    { "date": "2019-01-01", "equity": 750.0 },
+    { "date": "2020-01-01", "equity": 1000.0 },
+    { "date": "2021-01-01", "equity": 1250.0 },
+    { "date": "2022-01-01", "equity": 1500.0 },
+    { "date": "2023-01-01", "equity": 1750.0 },
+    { "date": "2024-01-01", "equity": 2000.0 },
+    { "date": "2025-01-01", "equity": 2250.0 },
+    { "date": "2026-01-01", "equity": 2500.0 }
+  ]
+}
