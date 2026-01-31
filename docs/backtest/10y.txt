@@ -1,0 +1,22 @@
+AOE Options — 10-Year Backtest Summary (Static Placeholder)
+
+This repository does not include the full 10-year backtest dataset due to size
+and deployment constraints (Streamlit Community Cloud).
+
+Original results (run locally):
+
+• Strategy: Delta-neutral iron condors (defined risk)
+• Horizon: ~10 years
+• Instruments: Large-cap US equities & ETFs
+• Rebalance cadence: ~weekly
+• Risk model: Fixed risk per trade, capped exposure
+
+High-level characteristics observed:
+• Stable equity curve with bounded drawdowns
+• Returns driven primarily by time decay and volatility premium
+• Performance sensitive to slippage and execution assumptions
+
+To regenerate full results:
+Run the backtest locally using the `backtest_universe` pipeline.
+
+This file exists to keep the UI non-empty on cloud deployments.
